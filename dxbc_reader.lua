@@ -1,7 +1,7 @@
 
 
 local DataDump = require 'table_dumper'
-
+local testLoad = require 'lpeg'
 
 local argparse = require 'argparse'
 local arg_parse = argparse('dxbc_reader')
@@ -9,7 +9,8 @@ local arg_parse = argparse('dxbc_reader')
 arg_parse:argument('input', 'input file')
 arg_parse:option('-o --output', 'output file', false)
 arg_parse:option('-d --debug', 'print debug info', false)
-arg_parse:option('-p --print', 'std print', true)
+arg_parse:option('-p --print', 'std print', false)
+arg_parse:option('-s --speical', 'renderdoc output', true)
 
 local args = arg_parse:parse()
 
@@ -41,17 +42,27 @@ local parse_data = parser(str)
 
 dxbc_def:init(parse_data)
 
---print(DataDump(parse_data))
+
+print(DataDump(parse_data))
 
 local function get_op(op)
     if not op then return end
 
     local capture
-    local target_op
-    for op_def in  pairs(dxbc_def.shader_def) do
+    local target_op = nil
+    for op_def in pairs(dxbc_def.shader_def_high) do
         if op:gsub('^' .. op_def .. '$', function(...) capture = {...} end) and capture then
             target_op = op_def
             break
+        end
+    end
+
+    if target_op == nil then
+        for op_def in  pairs(dxbc_def.shader_def) do
+            if op:gsub('^' .. op_def .. '$', function(...) capture = {...} end) and capture then
+                target_op = op_def
+                break
+            end
         end
     end
     return target_op, capture
@@ -124,6 +135,7 @@ if DEBUG == 't' then
     append(DataDump(res_def.binding_data))
 end
 
+if args.speical == false then
 ------------  CBUFFER DEFINE
 for _, cbuff in pairs(res_def.cbuff_data) do
     append('class ' .. cbuff.cbuffer_name .. '{')
@@ -135,41 +147,98 @@ end
 
 local _tex_reg_cnt = 1
 append('class INPUT {')
-for _, var in pairs(res_def.input_data) do
-    if var.name == 'TEXCOORD' then
-        append('\t' .. var.name .. _tex_reg_cnt .. ';')
-        _tex_reg_cnt = _tex_reg_cnt+1
-    else
-        append('\t' .. var.name.. ';')
+    for _, var in pairs(res_def.input_data) do
+        if var.name == 'TEXCOORD' then
+            append('\t' .. var.name .. _tex_reg_cnt .. ';')
+            _tex_reg_cnt = _tex_reg_cnt+1
+        else
+            append('\t' .. var.name.. ';')
+        end
     end
-end
-append('}')
+    append('}')
 
-_tex_reg_cnt=1
-append('class OUT {')
-for _, var in pairs(res_def.output_data) do
-    if var.name == 'TEXCOORD' then
-        append('\t' .. var.name .. _tex_reg_cnt.. ';')
-        _tex_reg_cnt = _tex_reg_cnt+1
-    else
-        append('\t' .. var.name .. ';')
+    _tex_reg_cnt=1
+    append('class OUT {')
+    for _, var in pairs(res_def.output_data) do
+        if var.name == 'TEXCOORD' then
+            append('\t' .. var.name .. _tex_reg_cnt.. ';')
+            _tex_reg_cnt = _tex_reg_cnt+1
+        else
+            append('\t' .. var.name .. ';')
+        end
     end
+    append('}')
 end
-append('}')
 ------------ CBUFFER DEFINE END
+if args.speical == false then
+    append("void main(INPUT in) {")
+end
+    blocks[1] = {close = {}}
 
-append("void main(INPUT in) {")
-blocks[1] = {close = {}}
+local Is3DTexDict = {}
+-----find variable declaration
+if args.speical == true then
+    local vIdx = 2
+    while vIdx <= #parse_data do
+        local command = parse_data[vIdx]
+
+        vIdx = vIdx + 1
+        if command.op == 'dcl_temps' then
+            --print(DataDump(command.args))
+            local maxVarNum = tonumber(command.args[1].name)
+            local printVarIdx = 0
+            local printStr = '\tfloat4 '
+            while printVarIdx <= maxVarNum do
+                local dotStr = ','
+                if printVarIdx == maxVarNum then
+                    dotStr = ';'
+                end 
+                printStr = printStr .. string.format("r%d%s",printVarIdx,dotStr)
+                printVarIdx = printVarIdx + 1
+            end
+            append(printStr)
+        end
+
+        if command.op == 'dcl_indexableTemp' then
+            local indexableStr = string.format('\tfloat%s %s[%s];',command.args[2].name,command.args[1].name,command.args[1].idx)
+            --print(DataDump(command.args))
+            append(indexableStr)
+        end
+
+        if string.find(command.op , 'dcl_output') then
+            local printOutStr = string.format('\tfloat%d %s;', #command.args[1].suffix, command.args[1].name)
+            append(printOutStr)
+            --print(DataDump(command.args))
+        end
+
+        if string.find(command.op, 'dcl_immediateConstantBuffer') then
+            local printIcbStr = string.format('\tfloat4 icb[4] = %s;//may be wrong size', command.args[1])
+            append(printIcbStr)
+        end
+
+        if string.find(command.op, 'dcl_resource_texture3d') then
+            Is3DTexDict[command.args[1].name] = true
+        end
+
+    end
+end
+
 while idx <= #parse_data do
     local command = parse_data[idx]
     if command.op then
         local op_name, op_param = get_op(command.op)
-
+        
         if op_name then
-            local op_func = dxbc_def.shader_def[op_name]
+            local op_func = dxbc_def.shader_def_high[op_name]
+            if op_func == nil then
+                op_func = dxbc_def.shader_def[op_name]
+            end
             if op_func then
                 pre_process_command(command)
                 op_param = op_param and arr2dic( op_param) or {}
+                
+                op_param.Is3DTexDict = Is3DTexDict
+                --print(op_name,DataDump(command.args))
                 local op_str, block_tag = op_func(op_param, table.unpack(command.args))
 
                 local last_block = blocks[#blocks]
@@ -199,7 +268,10 @@ while idx <= #parse_data do
     end
     idx = idx+1
 end
-append("}")
+
+if args.speical == false then
+    append("}")
+end
 
 local ret = table.concat(translate, '\n')
 if args.print then

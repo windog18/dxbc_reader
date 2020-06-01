@@ -244,6 +244,12 @@ m.shader_def = {
         local namec = get_var_name(c, a)
         return _format('%s = max(%s, %s)', namea, nameb, namec)
     end,
+    ['[uid]?max_sat'] = function(op_args, a, b, c)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b, a)
+        local namec = get_var_name(c, a)
+        return _format('%s = saturate(max(%s, %s))', namea, nameb, namec)
+    end,
     ['sincos(.*)'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
         local nameb = get_var_name(b, a)
@@ -251,6 +257,10 @@ m.shader_def = {
         if op_args._sat then
             return _format('%s = saturate(sin(%s)); %s = saturate(cos(%s))', namea, nameb, namea, namec)
         else
+            if nameb == 'nil' and namec ~= 'nil' then
+                return _format('%s=cos(%s)', namea, namec)
+            end
+            
             return _format('%s = sin(%s); %s=cos(%s)', namea, nameb, namea, namec)
         end
     end,
@@ -266,8 +276,14 @@ m.shader_def = {
         local n_addr, com_addr = get_var_name(addr, nil, true)
         local n_texture, com_texture = get_var_name(texture, dest, true)
         local n_sampler = get_var_name(sampler)
-        return _format('%s = tex2D(%s, %s.%s).%s //sample_state %s',
-                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), com_texture, n_sampler)
+        local idxNum = 2
+        if op_args and op_args.Is3DTexDict[n_texture] then
+            idxNum = 3
+        end
+        --return _format('%s = tex2D(%s, %s.%s).%s //sample_state %s',
+        --            n_dest, n_texture, n_addr, com_addr:sub(1, 2), com_texture, n_sampler)
+        return _format('%s = %s.Sample(%s, %s.%s).%s',
+                      n_dest, n_texture, n_sampler, n_addr, com_addr:sub(1,idxNum), com_texture)  
     end,
     ['ld_indexable.*'] = function(op_args, dest, addr, texture)
         -- load texture data
@@ -275,8 +291,14 @@ m.shader_def = {
         local n_dest = get_var_name(dest)
         local n_addr, com_addr = get_var_name(addr, nil, true)
         local n_texture, com_texture = get_var_name(texture, dest, true)
-        return _format('%s = tex2D(%s, %s.%s).%s //ld_indexable',
-                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), com_texture)
+        local idxNum = 2
+        if op_args and op_args.Is3DTexDict[n_texture] then
+            idxNum = 3
+        end
+        --return _format('%s = tex2D(%s, %s.%s).%s; //ld_indexable',
+        --            n_dest, n_texture, n_addr, com_addr:sub(1, 2), com_texture)
+        return _format('%s = %s.Load(int3(%s.%s)).%s; //ld_indexable',
+                        n_dest, n_texture, n_addr, com_addr:sub(1,3), com_texture)
     end,
 
     ['[ui]?mad(.*)'] = function(op_args, a, b, c, d)
@@ -331,7 +353,7 @@ m.shader_def = {
     ['not'] = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = !%s', namea, nameb, namec)
+        return _format('%s = !%s', namea, nameb)
     end,
     ['[uid]?lt'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
@@ -349,13 +371,13 @@ m.shader_def = {
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
         local namec = get_var_name(c)
-        return _format('%s = %s << %s', namea, nameb, namec)
+        return _format('%s = IntConvert(%s) << %s', namea, nameb, namec)
     end,
     ['[ui]?shr'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
         local namec = get_var_name(c)
-        return _format('%s = %s >> %s', namea, nameb, namec)
+        return _format('%s = IntConvert(%s) >> %s', namea, nameb, namec)
     end,
     ['discard(.*)'] = function(op_args, a)
         local namea = get_var_name(a)
@@ -406,9 +428,9 @@ m.shader_def = {
         end
         local namea = get_var_name(a)
         if op_args.c_z then
-            return _format('if (%s == 0) continue', namea)
+            return _format('if (IntConvert(%s) == 0) continue', namea)
         elseif op_args.c_nz then
-            return _format('if (%s != 0) continue', namea)
+            return _format('if (IntConvert(%s) != 0) continue', namea)
         else
             assert(false, 'continue with args' .. DataDump(op_args))
         end
@@ -441,37 +463,37 @@ m.shader_def = {
     round_ni = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = floor(%s) //round_ni', namea, nameb)
+        return _format('%s = floor(%s); //round_ni', namea, nameb)
     end,
     round_pi = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = ceil(%s) //round_pi', namea, nameb)
+        return _format('%s = ceil(%s); //round_pi', namea, nameb)
     end,
     round_ne = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = floor(%s) //round_ne, nearest even', namea, nameb)
+        return _format('%s = floor(%s); //round_ne, nearest even', namea, nameb)
     end,
     round_z = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = floor(%s) //round_z, round towards zero', namea, nameb)
+        return _format('%s = floor(%s); //round_z, round towards zero', namea, nameb)
     end,
     ftoi = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = floor(%s) //ftoi', namea, nameb)
+        return _format('%s = floor(%s); //ftoi', namea, nameb)
     end,
     ftou = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = floor(%s) //ftou', namea, nameb)
+        return _format('%s = floor(%s); //ftou', namea, nameb)
     end,
     ['[uid]?tof'] = function(op_args, a, b)
         local namea = get_var_name(a)
         local nameb = get_var_name(b)
-        return _format('%s = %s // itof', namea, nameb)
+        return _format('%s = %s; // itof', namea, nameb)
     end,
     ['and'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
@@ -481,7 +503,7 @@ m.shader_def = {
         if namec:find('0x3f800000') then
             comment = _format('// 0x3f800000=1.0, maybe means: if (%s==0xFFFFFFFF) %s=1.0', nameb, namea)
         end
-        return _format('%s = %s & %s %s', namea, nameb, namec, comment)
+        return _format('%s = IntConvert(%s) & IntConvert(%s) %s', namea, nameb, namec, comment)
     end,
     ['or'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
@@ -495,6 +517,7 @@ m.shader_def = {
         local namec = get_var_name(c, a)
         return _format('%s = %s ^ %s', namea, nameb, namec)
     end,
+    
     ['ret(.*)'] = function(op_args, a)
         if op_args.c_z then
             local namea = get_var_name(a)
@@ -503,13 +526,73 @@ m.shader_def = {
             local namea = get_var_name(a)
             return _format('if (%s != 0) return', namea)
         end
-        return 'return'
+        return ''
     end,
 
     ['vs_%d_%d'] = false,
     ['ps_%d_%d'] = false,
     ['cs_%d_%d'] = false,
     ['dcl_.*'] = false,
+}
+
+m.shader_def_high = {
+    ['sample_c_lz.*'] = function(op_args, dest, addr, texture, sampler, compareTarget)
+        local n_dest = get_var_name(dest)
+        local n_addr, com_addr = get_var_name(addr, nil, true)
+        local n_texture, com_texture = get_var_name(texture, dest, true)
+        local n_sampler = get_var_name(sampler)
+        local n_compareTarget = get_var_name(compareTarget)
+        local idxNum = 2
+        if op_args and op_args.Is3DTexDict[n_texture] then
+            idxNum = 3
+        end
+        return _format('%s = %s.SampleCmpLevelZero(%s, %s.%s, %s).%s',
+                      n_dest, n_texture, n_sampler, n_addr, com_addr:sub(1,idxNum), n_compareTarget, com_texture)
+    end,
+    ['gather4.*'] = function (op_args, dest, addr, texture, sampler)
+        local n_dest = get_var_name(dest)
+        local n_addr, com_addr = get_var_name(addr, nil, true)
+        local n_texture, com_texture = get_var_name(texture, dest, true)
+        local n_sampler = get_var_name(sampler)  
+        return _format('%s = %s.Gather(%s, %s.%s).%s', n_dest, n_texture, n_sampler, n_addr, com_addr:sub(1,2),com_texture)      
+    end,
+    ['dp2(.*)'] = function(op_args, a, b, c)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        local namec = get_var_name(c)
+        if op_args._sat then
+            return _format('%s = saturate(dot(%s.xy, %s.xy))', namea, nameb, namec)
+        else
+            return _format('%s = dot(%s.xy, %s.xy)', namea, nameb, namec)
+        end
+    end,
+    ['dp3(.*)'] = function(op_args, a, b, c)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        local namec = get_var_name(c)
+        if op_args._sat then
+            return _format('%s = saturate(dot(%s.xyz, %s.xyz))', namea, nameb, namec)
+        else
+            return _format('%s = dot(%s.xyz, %s.xyz)', namea, nameb, namec)
+        end
+    end,
+    ['dp4(.*)'] = function(op_args, a, b, c)
+        local namea = get_var_name(a)
+        local nameb = get_var_name(b)
+        local namec = get_var_name(c)
+        if op_args._sat then
+            return _format('%s = saturate(dot(%s.xyzw, %s.xyzw))', namea, nameb, namec)
+        else
+            return _format('%s = dot(%s.xyzw, %s.xyzw)', namea, nameb, namec)
+        end
+    end,
+    ['[d]?movc'] = function(op_args, dest, cond, a, b)
+        local n_dest= get_var_name(dest)
+        local n_cond = get_var_name(cond, dest)
+        local n_a = get_var_name(a, dest)
+        local n_b = get_var_name(b, dest)
+        return _format('%s = %s ? %s : %s', n_dest, n_cond, n_a, n_b)
+    end,
 }
 
 -- sm5
@@ -527,6 +610,9 @@ m.shader_def5 = {
     end,
 }
 
+m.command_modifer_def = {
+
+}
 
 m.modifier_def = {
     sat = function(a)
@@ -548,15 +634,20 @@ m.shader_def_cs = {
         local n_addr, com_addr = get_var_name(addr, nil, true)
         local n_offset, com_offset = get_var_name(offset, nil, true)
         local n_texture, com_texture = get_var_name(texture, dest, true)
-        return _format('%s = %s[%s.%s][%s].%s //ld_structured',
-                    n_dest, n_texture, n_addr, com_addr:sub(1, 2), n_offset, com_texture)
+        if com_addr == nil then
+            return _format('%s = %s[%s][%s].%s; //ld_structured',
+                            n_dest, n_texture, n_addr, n_offset, com_texture)
+        else
+            return _format('%s = %s[%s.%s][%s].%s; //ld_structured',
+                        n_dest, n_texture, n_addr, com_addr:sub(1, 2), n_offset, com_texture)
+        end
     end,
     ['store_structured'] = function(op_args, a, b, c, d)
         local namea, a_com = get_var_name(a, nil, true)
         local nameb = get_var_name(b)
         local namec = get_var_name(c)
         local named = get_var_name(d, a)
-        return _format('%s[%s][%s].%s = %s // store_structured', namea, nameb, namec, a_com, named)
+        return _format('%s[%s][%s].%s = %s; // store_structured', namea, nameb, namec, a_com, named)
     end,
     ['store_uav_typed'] = function(op_args, a, b, c)
         local namea = get_var_name(a)
@@ -566,6 +657,11 @@ m.shader_def_cs = {
     end,
     ['sync(.*)'] = function(op_args)
         return 'sync'
+    end,
+    ['bufinfo(.*)'] = function(op_args, a, b)
+        local namea = get_var_name(a)
+        local nameb, b_com = get_var_name(b, nil, true)
+        return _format('%s.GetDimensions(%s)', nameb, namea)
     end,
 }
 

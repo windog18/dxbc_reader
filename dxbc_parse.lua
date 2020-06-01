@@ -51,6 +51,7 @@ end
 local op = C(variable * (space^-1 * (P'('*any_patt(')')*P')')
     + ' linear'
     + ' noperspective'
+    + ' centroid'
     + ' constant'
     + ' linearcentroid')^0)
 
@@ -70,6 +71,10 @@ local _var_idx_patt = C((_alpnum+S'_+ .')^1)
 local _var_idx = P'[' * _var_idx_patt * P']' / function(var_idx)
         return {idx = var_idx}
     end
+local _var_idx1 = P'[' * _var_idx_patt * P']' / function(var_idx)
+    return {idx1 = var_idx}
+end
+
 
 local _var_suffix = P'.' * C(_alpha^1) / function(var_suffix)
         return {suffix = var_suffix}
@@ -93,13 +98,29 @@ local _abs = C'|' / function()
         return {abs=true}
     end
 
+local _absVar = P('abs') * space ^ 0  * P('(') * (_negtive^-1 * _var_name  * _var_idx^-1 * _var_suffix^-1) * P(')') / function(...)
+        --DataDump(var_name)
+        local ret = {}
+        for _, tbl in ipairs({...}) do
+            for k, v in pairs(tbl) do
+                ret[k] = v
+            end
+        end
+        ret.abs = true;
+        return ret
+    end
+
+
 -- TODO abs process
-local var = (_negtive^-1*_vector + _negtive^-1 * _abs^-1
-                * _var_name * _var_idx^-1 * _var_suffix^-1 * _abs^-1) / merge_tbl
+local var = (_negtive^-1 * _absVar + _negtive^-1*_vector + _negtive^-1 * _abs^-1
+                * _var_name * _var_idx^-2 * _var_suffix^-1 * _abs^-1
+           ) / merge_tbl
 
-local args = var * (space^0*P(",")*space^0 *var)^0
+local varsDict = (space^-1 * C(P'{'*P(1-P'}\n')^0*P'}'))
 
-local command = C(op * space ^0 * args^-1) / function(...)
+local args = var * (space^0 * P(",") * space^0 * var)^0
+
+local command = C(op * space ^0 * (args + varsDict)^-1) / function(...)
         local data = {...}
         local src = data[1]
         local op_name = data[2]
@@ -111,8 +132,8 @@ local command = C(op * space ^0 * args^-1) / function(...)
             src = src,
         }
     end
-
---print(DataDump({lpeg.match(command, 'move x0[1].x, xxx')}))
+--print(DataDump({lpeg.match(op * varsDict^-1, 'dcl_immediateConstantBuffer {{ 1.0000, 0, 0, 0},\n{0, 1.0000, 0, 0}\n}\n dcl_constantbuffer globalScalars3')}))
+--print(DataDump({lpeg.match(command, 'log r0.z, abs(r0.z)')}))
 
 local trunk = ((comment+command)*pass)^0
 
@@ -211,6 +232,9 @@ local function process_output(list, start_idx, end_idx)
     return data
 end
 
+--tVal = lpeg.match(GetVarNumber, 'd3')
+--print(tVal)
+
 return function(input)
         local _ret = {lpeg.match(trunk, input)}
         local ret = {}
@@ -267,6 +291,5 @@ return function(input)
                 input_data = input_data,
                 output_data = output_data,
             })
-
         return ret
     end
